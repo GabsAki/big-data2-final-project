@@ -1,5 +1,8 @@
 import pyspark.sql.functions as F
 from pyspark.sql import SparkSession
+from pyspark.sql.types import IntegerType
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.regression import DecisionTreeRegressor
 
 MONG_CONN_STR: str = "mongodb+srv://101512611:nxXrrEuGOgXBTzcZ@cluster0.sbzycsq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 AWS_ACCESS_KEY: str = "REPLACE_WITH_ACCESS_KEY"
@@ -34,6 +37,22 @@ df_ed_prices = spark.read \
 
 df_ed_prices = df_ed_prices.withColumn('lat_round', F.round(F.col('lat'), 1))
 df_ed_prices = df_ed_prices.withColumn('long_round', F.round(F.col('long'), 1))
+
+
+# Apply ML model to get price predictions
+df_ed_prices = df_ed_prices.withColumn("bedrooms_ag", df_ed_prices["bedrooms_ag"].cast(IntegerType()))
+df_ed_prices = df_ed_prices.withColumn("bedrooms_bg", df_ed_prices["bedrooms_bg"].cast(IntegerType()))
+df_ed_prices = df_ed_prices.withColumn("bathrooms", df_ed_prices["bathrooms"].cast(IntegerType()))
+df_ed_prices = df_ed_prices.withColumn("sqft", df_ed_prices["sqft"].cast(IntegerType()))
+df_ed_prices = df_ed_prices.withColumn("parking", df_ed_prices["parking"].cast(IntegerType()))
+df_ed_prices = df_ed_prices.withColumn("mean_district_income", df_ed_prices["mean_district_income"].cast(IntegerType()))
+df_ed_prices = df_ed_prices.withColumn("final_price", df_ed_prices["final_price"].cast(IntegerType()))
+
+assembler = VectorAssembler(inputCols=["bedrooms_ag", "bedrooms_bg", "bathrooms", "sqft", "parking", "mean_district_income"], outputCol="features", handleInvalid='skip')
+regression_data = assembler.transform(df_ed_prices)
+regression_model = DecisionTreeRegressor(featuresCol="features", labelCol="final_price").fit(regression_data)
+
+df_ed_prices = regression_model.transform(regression_data)
 
 
 # Load Postal Code data from S3
@@ -96,6 +115,19 @@ df_prec = df_prec.withColumn('day', F.substring(F.col('DATE'), 1, 10))
 df_prec = df_prec.groupBy("day", "lat_round", "long_round").agg(F.avg("RAINFALL").alias("rainfall"))
 
 df_join = df_join.join(df_prec, on=['lat_round', 'long_round'], how="full_outer")
+
+
+# Load Precipitaton data from Snowflake
+df_cameras = spark.read \
+.format(SNOWFLAKE_SOURCE_NAME) \
+    .options(**sfOptions) \
+    .option("dbtable", "CAMERAS_LOCATIONS") \
+    .load()
+
+df_cameras = df_cameras.withColumn('lat_round', F.round(F.col('LATITUDE'), 1))
+df_cameras = df_cameras.withColumn('long_round', F.round(F.col('LONGITUDE'), 1))
+
+df_join = df_join.join(df_cameras, on=['lat_round', 'long_round'], how="full_outer")
 
 
 # Load Mortgages data from Azure SQL
